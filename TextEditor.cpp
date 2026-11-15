@@ -1331,12 +1331,45 @@ void TextEditor::renderPopups() {
 
 	// render autocomplete popup
 	if (autocomplete.render(document, cursors, typeSetter, config.language, textLeftOffset, glyphSize)) {
-		// user picked a suggestion so insert it
-		const auto start = autocomplete.getReplacementStart();
-		const auto end = autocomplete.getReplacementEnd(document);
-		const auto replacement = autocomplete.getReplacement();
-		replaceSectionText(start, end, replacement);
+		// user picked a suggestion so insert it at every cursor
+		completeAtAllCursors(autocomplete.getReplacement());
 	}
+}
+
+
+//
+//	TextEditor::completeAtAllCursors
+//
+
+void TextEditor::completeAtAllCursors(const std::string& replacement) {
+	// from the last cursor to the first: an edit leaves the positions before it as they were,
+	// and the cursors after it (already completed) are moved by it
+	const auto transaction = startTransaction();
+	auto limit = DocPos(document.size(), 0);
+
+	for (auto cursor = cursors.end(); cursor != cursors.begin();) {
+		cursor--;
+		DocPos start, end;
+		autocomplete.getReplacementAt(document, cursor->getSelectionEnd(), start, end);
+
+		// two cursors in one word: the later one's replacement keeps its part
+		if (end > limit) {
+			end = limit;
+		}
+
+		if (start > end) {
+			continue;
+		}
+
+		deleteText(transaction, start, end);
+		cursors.adjustForDelete(cursor, start, end);
+		const auto newEnd = insertText(transaction, start, replacement);
+		cursor->update(newEnd, false);
+		cursors.adjustForInsert(cursor, start, newEnd);
+		limit = start;
+	}
+
+	endTransaction(transaction);
 }
 
 
@@ -1524,16 +1557,10 @@ void TextEditor::handleKeyboardInputs() {
 		else if (config.findReplaceEnabled && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F)) { findAll(); }
 		else if (config.findReplaceEnabled && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G, ImGuiInputFlags_Repeat)) { findNext(); }
 
-		// autocomplete support
+		// autocomplete support (the main cursor's word is completed at every cursor)
 		else if (!config.readOnly && ImGui::Shortcut(autocomplete.getTriggerShortcut())) {
-			// don't activate if we have multiple cursors active
-			if (cursors.hasMultiple()) {
-				// TODO: inform user
-
-			} else {
-				if (autocomplete.startShortcut(cursors)) {
-					makeCursorVisible();
-				}
+			if (autocomplete.startShortcut(cursors)) {
+				makeCursorVisible();
 			}
 		}
 
@@ -2796,7 +2823,7 @@ void TextEditor::handleCharacter(ImWchar character) {
 
 	endTransaction(transaction);
 
-	if (!cursors.hasMultiple() && autocomplete.startTyping(cursors, character)) {
+	if (autocomplete.startTyping(cursors, character)) {
 		makeCursorVisible();
 	}
 }
@@ -9351,6 +9378,35 @@ TextEditor::DocPos TextEditor::AutoComplete::getReplacementEnd(const Document& d
 	} else {
 		return findWordEnd(document, currentLocation);
 	}
+}
+
+
+//
+//	TextEditor::AutoComplete::getReplacementAt
+//
+
+void TextEditor::AutoComplete::getReplacementAt(const Document& document, DocPos cursor, DocPos& start, DocPos& end) const {
+	const auto mainStart = getReplacementStart();
+	const auto mainEnd = getReplacementEnd(document);
+
+	if (cursor == currentLocation) {
+		start = mainStart;
+		end = mainEnd;
+		return;
+	}
+
+	const auto before = currentLocation.index - mainStart.index;
+
+	if (cursor.index >= before &&
+		document.getSectionText(DocPos(cursor.line, cursor.index - before), cursor) == document.getSectionText(mainStart, currentLocation)) {
+
+		start = DocPos(cursor.line, cursor.index - before);
+
+	} else {
+		start = findWordStart(document, cursor);
+	}
+
+	end = mainEnd == currentLocation ? cursor : findWordEnd(document, cursor);
 }
 
 

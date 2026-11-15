@@ -2016,6 +2016,12 @@ protected:
 		DocPos getReplacementEnd(const Document& document) const;
 		inline std::string getReplacement() { return currentSelection < state.suggestions.size() ? state.suggestions[currentSelection] : ""; }
 
+		// the section a picked suggestion replaces at a cursor: at the main one, the above; at
+		// another, as many glyphs before it as the main one replaces when they read the same
+		// (its own word's start otherwise) and the rest of its word, or nothing after it when
+		// the main one keeps the text after it
+		void getReplacementAt(const Document& document, DocPos cursor, DocPos& start, DocPos& end) const;
+
 	private:
 		// properties
 		bool configured = false;
@@ -2043,6 +2049,9 @@ protected:
 
 	// reset the editor's state
 	void reset();
+
+	// put a picked suggestion in place of the word at every cursor (one undoable step)
+	void completeAtAllCursors(const std::string& replacement);
 
 	// render (parts of) the text editor
 	bool render(const char* title, const ImVec2& size, ImGuiChildFlags childFlags, ImGuiWindowFlags windowFlags);
