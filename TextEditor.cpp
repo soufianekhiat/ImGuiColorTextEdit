@@ -158,7 +158,7 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 		documentChanged = updateState();
 
 		// handle mouse inputs (unless an inline widget owns the mouse this frame)
-		if (!(inlineWidgets && inlineWidgets->mouse && inlineWidgets->mouse())) {
+		if (!(config.inlineWidgets && config.inlineWidgets->mouse && config.inlineWidgets->mouse())) {
 			handleMouseInteractions();
 		}
 
@@ -198,8 +198,8 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 		renderText();
 		renderCursorCarets();
 
-		if (inlineWidgets && inlineWidgets->draw) {
-			inlineWidgets->draw(drawList);
+		if (config.inlineWidgets && config.inlineWidgets->draw) {
+			config.inlineWidgets->draw(drawList);
 		}
 
 		// end clipping
@@ -816,7 +816,7 @@ void TextEditor::renderText() {
 		while (column < endColumn && column <= lastVisibleColumn) {
 			const auto& glyph = line[index++];
 			const auto codepoint = glyph.codepoint;
-			const ImVec2 glyphPos(rowScreenPos.x + column * glyphSize.x, rowScreenPos.y);
+			const ImVec2 glyphPos(rowScreenPos.x + (column + glyph.inlay) * glyphSize.x, rowScreenPos.y); // after its room
 
 			// handle tabs
 			if (codepoint == '\t') {
@@ -8678,6 +8678,7 @@ void TextEditor::TypeSetter::updateLine(Line& line) {
 	if (line.shaped) {
 		for (auto& glyph : line) {
 			glyph.columns = 1;
+			glyph.inlay = 0;
 		}
 
 		line.rows = 1;
@@ -8687,18 +8688,29 @@ void TextEditor::TypeSetter::updateLine(Line& line) {
 		return;
 	}
 
+	// the room the application keeps before glyphs (a widget drawn in the text)
+	room.assign(line.size(), 0);
+
+	if (inlineWidgets && inlineWidgets->inlays && line.size()) {
+		inlineWidgets->inlays(line.data(), line.size(), room.data());
+	}
+
 	// update glyph widths
 	size_t columns = 0;
 
-	for (auto& glyph : line) {
+	for (size_t i = 0; i < line.size(); i++) {
+		auto& glyph = line[i];
+		glyph.inlay = room[i];
+		columns += glyph.inlay;
+
 		if (glyph.codepoint == '\t') {
-			glyph.columns = static_cast<uint8_t>(tabSize - (columns % tabSize));
+			glyph.columns = static_cast<uint8_t>(glyph.inlay + tabSize - (columns % tabSize));
+			columns += glyph.columns - glyph.inlay;
 
 		} else {
-			glyph.columns = static_cast<uint8_t>(CodePoint::getGlyphWidth(glyph.codepoint));
+			glyph.columns = static_cast<uint8_t>(glyph.inlay + CodePoint::getGlyphWidth(glyph.codepoint));
+			columns += glyph.columns - glyph.inlay;
 		}
-
-		columns += glyph.columns;
 	}
 
 	if (wordWrap) {
@@ -8728,7 +8740,8 @@ bool TextEditor::TypeSetter::update(const Config& config, Document& document, co
 		tabSize != config.tabSize ||
 		wordWrap != config.wordWrap ||
 		(wordWrap && wordWrapColumns != config.wordWrapColumns) ||
-		shaper != config.shaper;
+		shaper != config.shaper ||
+		inlineWidgets != config.inlineWidgets;
 
 	// update all lines on configuration changes
 	if (configChanged) {
@@ -8737,6 +8750,7 @@ bool TextEditor::TypeSetter::update(const Config& config, Document& document, co
 		wordWrap = config.wordWrap;
 		wordWrapColumns = config.wordWrapColumns;
 		shaper = config.shaper;
+		inlineWidgets = config.inlineWidgets;
 
 		// update all the lines
 		for (auto& line : document) {

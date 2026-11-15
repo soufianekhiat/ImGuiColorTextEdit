@@ -248,16 +248,11 @@ public:
 	// dragged or picked: the whole gesture is one step)
 	void ReplaceSectionTextMerged(DocPos start, DocPos end, const std::string_view& text, bool merge);
 
-	// widgets over the text (a value to drag, a colour to pick): `mouse` is asked first each frame
-	// and owns the mouse when it returns true (the editor then neither selects nor moves a cursor);
-	// `draw` draws over the text, clipped to the text area; both run inside the editor's window
-	struct InlineWidgets {
-		std::function<bool()> mouse;
-		std::function<void(ImDrawList* drawList)> draw;
-	};
+	// widgets over the text (a value to drag, a colour to pick), defined below with the glyph
+	struct InlineWidgets;
 
 	// the widgets must outlive their use by the editor (nullptr: none)
-	inline void SetInlineWidgets(const InlineWidgets* value) { inlineWidgets = value; }
+	inline void SetInlineWidgets(const InlineWidgets* value) { config.inlineWidgets = value; }
 
 	// manipulate cursors and selections (line numbers are zero-based)
 	inline void SelectAll() { selectAll(); }
@@ -662,8 +657,25 @@ public:
 		BreakOption breakOption = BreakOption::undefined;
 		uint8_t columns = 1;
 
+		// columns of room before the glyph that the application draws in (InlineWidgets::inlays),
+		// counted in `columns`
+		uint8_t inlay = 0;
+
 		// squiggle reference
 		uint32_t squiggle = 0;
+	};
+
+	// widgets over the text (a value to drag, a colour to pick): `mouse` is asked first each frame
+	// and owns the mouse when it returns true (the editor then neither selects nor moves a cursor);
+	// `draw` draws over the text, clipped to the text area; both run inside the editor's window
+	struct InlineWidgets {
+		std::function<bool()> mouse;
+		std::function<void(ImDrawList* drawList)> draw;
+
+		// room for a widget in the text (a colour's square before it): the columns to keep before
+		// each glyph of a line (`room` holds `count` zeros on entry), asked when the line is laid
+		// out; the caret before a glyph sits before its room. Lines the shaper lays out have none.
+		std::function<void(const Glyph* glyphs, size_t count, uint8_t* room)> inlays;
 	};
 
 	// iterator used in language-specific tokenizers
@@ -1144,6 +1156,9 @@ protected:
 
 		// complex script support (nullptr: every line on the grid)
 		const Shaper* shaper = nullptr;
+
+		// the application's widgets over the text (nullptr: none)
+		const InlineWidgets* inlineWidgets = nullptr;
 
 		// word wrap limits
 		size_t wordWrapColumns = 0;
@@ -1951,6 +1966,8 @@ protected:
 		bool wordWrap = false;
 		size_t wordWrapColumns = 0;
 		const Shaper* shaper = nullptr;
+		const InlineWidgets* inlineWidgets = nullptr;
+		std::vector<uint8_t> room; // a line's inlays, asked of the widgets
 		bool updated = false;
 
 		size_t totalRows = 0;
@@ -2327,8 +2344,6 @@ protected:
 	mutable std::unordered_map<uint64_t, ShapedLine> shapedLines; // by the line's content
 	ImFont* shapedFont = nullptr;
 	float shapedFontSize = 0.0f;
-
-	const InlineWidgets* inlineWidgets = nullptr;
 
 	// the pair around the main cursor, looked up again only when the cursor or the pairs change
 	Bracketeer::const_iterator getActiveBrackets();
