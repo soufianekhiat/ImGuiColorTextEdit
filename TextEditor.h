@@ -241,6 +241,24 @@ public:
 	inline bool CanRedo() const { return !config.readOnly && transactions.canRedo(); };
 	inline size_t GetUndoIndex() const { return transactions.getUndoIndex(); };
 
+	// changes with every edit, undo and redo -- a merged edit too, which keeps the undo index
+	inline size_t GetEditVersion() const { return transactions.getVersion(); }
+
+	// replace text; when `merge`, as one undo step with the previous replace made this way (a value
+	// dragged or picked: the whole gesture is one step)
+	void ReplaceSectionTextMerged(DocPos start, DocPos end, const std::string_view& text, bool merge);
+
+	// widgets over the text (a value to drag, a colour to pick): `mouse` is asked first each frame
+	// and owns the mouse when it returns true (the editor then neither selects nor moves a cursor);
+	// `draw` draws over the text, clipped to the text area; both run inside the editor's window
+	struct InlineWidgets {
+		std::function<bool()> mouse;
+		std::function<void(ImDrawList* drawList)> draw;
+	};
+
+	// the widgets must outlive their use by the editor (nullptr: none)
+	inline void SetInlineWidgets(const InlineWidgets* value) { inlineWidgets = value; }
+
 	// manipulate cursors and selections (line numbers are zero-based)
 	inline void SelectAll() { selectAll(); }
 	inline void SelectLine(size_t line) { selectLine(normalizeLine(line)); }
@@ -1666,6 +1684,9 @@ protected:
 		void addInsert(DocPos start, DocPos end, std::string_view text) { emplace_back(Action::Type::insertText, start, end, text); };
 		void addDelete(DocPos start, DocPos end, std::string_view text) { emplace_back(Action::Type::deleteText, start, end, text); };
 
+		// a later merged replace may fold into this one (ReplaceSectionTextMerged)
+		bool mergeable = false;
+
 	private:
 		// properties
 		Cursors before;
@@ -1683,6 +1704,10 @@ protected:
 
 		// add a transaction to the list and make it undoable
 		void add(std::shared_ptr<Transaction> transaction);
+
+		// fold a transaction into the last one when that one is mergeable and nothing was undone
+		// after it (false: nothing done)
+		bool merge(std::shared_ptr<Transaction> transaction);
 
 		// undo the last transaction
 		void undo(const Config& config, Document& document, Cursors& cursors);
@@ -2302,6 +2327,8 @@ protected:
 	mutable std::unordered_map<uint64_t, ShapedLine> shapedLines; // by the line's content
 	ImFont* shapedFont = nullptr;
 	float shapedFontSize = 0.0f;
+
+	const InlineWidgets* inlineWidgets = nullptr;
 
 	// the pair around the main cursor, looked up again only when the cursor or the pairs change
 	Bracketeer::const_iterator getActiveBrackets();

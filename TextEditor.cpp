@@ -157,8 +157,10 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 		handleKeyboardInputs();
 		documentChanged = updateState();
 
-		// handle mouse inputs
-		handleMouseInteractions();
+		// handle mouse inputs (unless an inline widget owns the mouse this frame)
+		if (!(inlineWidgets && inlineWidgets->mouse && inlineWidgets->mouse())) {
+			handleMouseInteractions();
+		}
 
 		// determine visible row/column limits
 		firstVisibleRow = static_cast<size_t>(std::floor(ImGui::GetScrollY() / glyphSize.y));
@@ -195,6 +197,10 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 		renderSquiggles();
 		renderText();
 		renderCursorCarets();
+
+		if (inlineWidgets && inlineWidgets->draw) {
+			inlineWidgets->draw(drawList);
+		}
 
 		// end clipping
 		drawList->PopClipRect();
@@ -4824,6 +4830,38 @@ void TextEditor::Transactions::add(std::shared_ptr<Transaction> transaction) {
 
 
 //
+//	TextEditor::Transactions::merge
+//
+
+bool TextEditor::Transactions::merge(std::shared_ptr<Transaction> transaction) {
+	if (empty() || undoIndex != size() || !back()->mergeable) {
+		return false;
+	}
+
+	auto& last = *back();
+	last.insert(last.end(), transaction->begin(), transaction->end());
+	last.setAfterState(transaction->getAfterState());
+	version++;
+
+	if (callback) {
+		std::vector<Change> changes;
+
+		for (const auto& action : *transaction) {
+			auto& change = changes.emplace_back();
+			change.insert = action.type == Action::Type::insertText;
+			change.start = action.start;
+			change.end = action.end;
+			change.text = action.text;
+		}
+
+		callback(changes);
+	}
+
+	return true;
+}
+
+
+//
 //	TextEditor::Transactions::undo
 //
 
@@ -6030,6 +6068,31 @@ void TextEditor::replaceSectionText(const DocPos& start, const DocPos& end, cons
 	cursors.clearAdditional();
 	cursors.getMain().update(newEnd, newEnd);
 	endTransaction(transaction);
+}
+
+
+//
+//	TextEditor::ReplaceSectionTextMerged
+//
+
+void TextEditor::ReplaceSectionTextMerged(DocPos start, DocPos end, const std::string_view& text, bool merge) {
+	start = normalizePos(start);
+	end = normalizePos(end);
+	const auto transaction = startTransaction();
+	deleteText(transaction, start, end);
+	const auto newEnd = insertText(transaction, start, text);
+	cursors.clearAdditional();
+	cursors.getMain().update(newEnd, newEnd);
+
+	if (transaction->size() > 0) {
+		cursors.update(document);
+		transaction->setAfterState(cursors);
+		transaction->mergeable = true;
+
+		if (!merge || !transactions.merge(transaction)) {
+			transactions.add(transaction);
+		}
+	}
 }
 
 
