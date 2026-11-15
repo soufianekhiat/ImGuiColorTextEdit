@@ -8742,11 +8742,14 @@ void TextEditor::TypeSetter::updateLine(Line& line) {
 bool TextEditor::TypeSetter::update(const Config& config, Document& document, const LineFold& lineFold) {
 	// see if the configuration changed
 	const bool configChanged =
+		invalidated ||
 		tabSize != config.tabSize ||
 		wordWrap != config.wordWrap ||
 		(wordWrap && wordWrapColumns != config.wordWrapColumns) ||
 		shaper != config.shaper ||
 		inlineWidgets != config.inlineWidgets;
+
+	invalidated = false;
 
 	// update all lines on configuration changes
 	if (configChanged) {

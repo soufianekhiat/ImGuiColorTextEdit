@@ -709,6 +709,11 @@ public:
 		inline bool hasPrevious() const { return lineStart && glyph > lineStart; }
 		inline ImWchar previous() const { return (glyph - 1)->codepoint; }
 
+		// codepoint `back` glyphs before the iterator on the same line, 0 before the line's start
+		inline ImWchar previous(size_t back) const {
+			return lineStart && glyph - lineStart >= static_cast<std::ptrdiff_t>(back) ? (glyph - back)->codepoint : 0;
+		}
+
 	private:
 		// properties
 		Glyph* glyph;
@@ -807,6 +812,10 @@ public:
 	// recolor the whole document on the next render: for a language whose custom tokenizer
 	// reads facts outside the line (names declared elsewhere, an external schema) that changed
 	inline void Recolorize() { colorizer.invalidate(); }
+
+	// lay every line out again on the next render: for inline widgets whose room (InlineWidgets::inlays)
+	// reads facts outside the line that changed
+	inline void Relayout() { typeSetter.invalidate(); }
 
 	// complex scripts (shaping)
 	//
@@ -1954,6 +1963,9 @@ protected:
 		inline bool isUpdated() const { return updated; }
 		inline void resetUpdated() { updated = false; }
 
+		// lay every line out again on the next update
+		inline void invalidate() { invalidated = true; }
+
 	private:
 		// update layout of specified line
 		void updateLine(Line& line);
@@ -1969,6 +1981,7 @@ protected:
 		const InlineWidgets* inlineWidgets = nullptr;
 		std::vector<uint8_t> room; // a line's inlays, asked of the widgets
 		bool updated = false;
+		bool invalidated = false; // every line owed a layout (invalidate)
 
 		size_t totalRows = 0;
 		size_t totalColumns = 0;
