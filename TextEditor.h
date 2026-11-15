@@ -228,6 +228,9 @@ public:
 	// programmatically set focus on the editor
 	inline void SetFocus() { focusOnEditor = true; }
 
+	// whether the editor's window had the keyboard focus when it last rendered
+	inline bool IsFocused() const { return focused; }
+
 	// clipboard actions
 	inline void Cut() { if (!config.readOnly) cut(); }
 	inline void Copy() const { copy(); }
@@ -767,6 +770,10 @@ public:
 	inline bool HasLanguage() const { return config.language != nullptr; }
 	inline std::string GetLanguageName() const { return config.language == nullptr ? "None" : config.language->name; }
 	inline void SetLanguageChangeCallback(std::function<void()> callback) { languageChangeCallback = callback; }
+
+	// recolor the whole document on the next render: for a language whose custom tokenizer
+	// reads facts outside the line (names declared elsewhere, an external schema) that changed
+	inline void Recolorize() { colorizer.invalidate(); }
 
 	// access language registry
 
@@ -1642,7 +1649,13 @@ protected:
 		// update state (if required)
 		bool update(const Config& config, Document& document);
 
+		// recolor every line on the next update, as a language change does
+		inline void invalidate() { invalidated = true; }
+
 	private:
+		// a full pass is owed (invalidate)
+		bool invalidated = false;
+
 		// update color in a single line
 		LineState updateLine(Line& line);
 
@@ -2166,6 +2179,7 @@ protected:
 
 	bool findReplaceVisible = false;
 	bool focusOnEditor = false;
+	bool focused = false;
 	bool focusOnFind = false;
 	bool findCancelledAutocomplete = false;
 	std::string findText;

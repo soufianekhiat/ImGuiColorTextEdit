@@ -88,6 +88,7 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 		const auto& style = ImGui::GetStyle();
 		fontScaleDpi = style.FontScaleDpi;
 		glyphSize = ImVec2(ImGui::CalcTextSize("#").x, ImGui::GetTextLineHeightWithSpacing() * config.lineSpacing);
+		focused = ImGui::IsWindowFocused();
 
 		// determine current position and visible size
 		cursorScreenPos = ImGui::GetCursorScreenPos();
@@ -4999,8 +5000,9 @@ TextEditor::LineState TextEditor::Colorizer::updateLine(Line& line) {
 //
 
 bool TextEditor::Colorizer::update(const Config& config, Document& document) {
-	// update all lines on configuration change
-	const bool configChanged = language != config.language;
+	// update all lines on configuration change (or when invalidated)
+	const bool configChanged = language != config.language || invalidated;
+	invalidated = false;
 
 	if (configChanged) {
 		language = config.language;
