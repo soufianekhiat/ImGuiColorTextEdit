@@ -90,6 +90,13 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 		glyphSize = ImVec2(ImGui::CalcTextSize("#").x, ImGui::GetTextLineHeightWithSpacing() * config.lineSpacing);
 		focused = ImGui::IsWindowFocused();
 
+		// shaped layouts are only valid in the font and size they were made in
+		if (font != shapedFont || fontSize != shapedFontSize) {
+			shapedLines.clear();
+			shapedFont = font;
+			shapedFontSize = fontSize;
+		}
+
 		// determine current position and visible size
 		cursorScreenPos = ImGui::GetCursorScreenPos();
 		visibleSize = ImGui::GetCurrentWindow()->InnerRect.GetSize();
@@ -295,12 +302,14 @@ void TextEditor::renderActiveBracketBackground() {
 				const auto startVis = docPos2VisPos(active->start);
 
 				if (startVis.row >= firstVisibleRow && startVis.row <= lastVisibleRow) {
-					const auto x = cursorScreenPos.x + textLeftOffset + startVis.column * glyphSize.x;
+					const auto a = columnToX(startVis.row, startVis.column);
+					const auto b = columnToX(startVis.row, startVis.column + 1);
+					const auto x = cursorScreenPos.x + textLeftOffset;
 					const auto y = cursorScreenPos.y + startVis.row * glyphSize.y;
 
 					drawList->AddRectFilled(
-						ImVec2(x, y),
-						ImVec2(x + glyphSize.x, y + glyphSize.y),
+						ImVec2(x + std::min(a, b), y),
+						ImVec2(x + std::max(a, b), y + glyphSize.y),
 						palette.get(Color::matchingBracketBackground));
 				}
 			}
@@ -309,12 +318,14 @@ void TextEditor::renderActiveBracketBackground() {
 				const auto endVis = docPos2VisPos(active->end);
 
 				if (endVis.row >= firstVisibleRow && endVis.row <= lastVisibleRow) {
-					const auto x = cursorScreenPos.x + textLeftOffset + endVis.column * glyphSize.x;
+					const auto a = columnToX(endVis.row, endVis.column);
+					const auto b = columnToX(endVis.row, endVis.column + 1);
+					const auto x = cursorScreenPos.x + textLeftOffset;
 					const auto y = cursorScreenPos.y + endVis.row * glyphSize.y;
 
 					drawList->AddRectFilled(
-						ImVec2(x, y),
-						ImVec2(x + glyphSize.x, y + glyphSize.y),
+						ImVec2(x + std::min(a, b), y),
+						ImVec2(x + std::max(a, b), y + glyphSize.y),
 						palette.get(Color::matchingBracketBackground));
 				}
 			}
@@ -344,19 +355,34 @@ void TextEditor::renderSelections() {
 							const auto lineRight =DocPos(i, line.size());
 							const auto docLeft = begin <= lineLeft ? lineLeft : begin;
 							const auto docRight = end > lineRight ? lineRight : end;
-							const auto visLeft = docPos2VisPos(docLeft);
-							const auto visRight = docPos2VisPos(docRight);
-
 							const auto x = cursorScreenPos.x + textLeftOffset;
-							const auto left = x + visLeft.column * glyphSize.x;
-							const auto right = x + visRight.column * glyphSize.x;
 							const auto y = cursorScreenPos.y + line.row * glyphSize.y;
 
-							drawList->AddRectFilled(
-								ImVec2(left, y),
-								ImVec2(right, y + glyphSize.y),
-								palette.get(Color::selection));
+							// a shaped line: each selected glyph's box (right to left runs
+							// make a logical range visually discontinuous)
+							if (const auto* shaped = getShapedLine(i)) {
+								for (size_t g = docLeft.index; g < docRight.index && g + 1 < shaped->carets.size(); g++) {
+									const auto a = shaped->carets[g];
+									const auto b = shaped->carets[g + 1];
+
+									drawList->AddRectFilled(
+										ImVec2(x + std::min(a, b), y),
+										ImVec2(x + std::max(a, b), y + glyphSize.y),
+										palette.get(Color::selection));
+								}
+
+							} else {
+								const auto visLeft = docPos2VisPos(docLeft);
+								const auto visRight = docPos2VisPos(docRight);
+								const auto left = x + visLeft.column * glyphSize.x;
+								const auto right = x + visRight.column * glyphSize.x;
+
+								drawList->AddRectFilled(
+									ImVec2(left, y),
+									ImVec2(right, y + glyphSize.y),
+									palette.get(Color::selection));
 							}
+						}
 
 					} else {
 						for (size_t j = 0; j < line.rows; j++) {
@@ -448,7 +474,7 @@ void TextEditor::renderMatchingBracketLines() {
 					endVisPos.row - startVisPos.row > 1) {
 
 					const auto column = std::min(startVisPos.column, endVisPos.column);
-					const auto lineX = cursorScreenPos.x + textLeftOffset + column * glyphSize.x;
+					const auto lineX = cursorScreenPos.x + textLeftOffset + columnToX(startVisPos.row, column);
 					const auto startY = cursorScreenPos.y + std::max(startVisPos.row + 1, firstVisibleRow) * glyphSize.y;
 					const auto endY = cursorScreenPos.y + std::min(endVisPos.row, lastVisibleRow) * glyphSize.y;
 
@@ -538,6 +564,35 @@ void TextEditor::renderSquiggles() {
 			float squiggleLeft = 0.0f;
 			const float thickness = 1.2f * fontScaleDpi;
 
+			// a shaped line: each run of glyphs with one squiggle, from the leftmost to the
+			// rightmost of their carets
+			if (const auto* shaped = getShapedLine(typeSetter[i].line)) {
+				for (size_t start = 0; start < line.size();) {
+					auto end = start + 1;
+
+					while (end < line.size() && line[end].squiggle == line[start].squiggle) {
+						end++;
+					}
+
+					if (line[start].squiggle) {
+						float left = shaped->carets[start];
+						float right = left;
+
+						for (size_t g = start; g <= end; g++) {
+							left = std::min(left, shaped->carets[g]);
+							right = std::max(right, shaped->carets[g]);
+						}
+
+						const auto& squiggle = squiggles[line[start].squiggle - 1];
+						renderSquiggle(drawList, rowScreenPos.x + left, rowScreenPos.x + right, rowScreenPos.y, rowScreenPos.y + glyphSize.y, thickness, squiggle.color, squiggle.tooltip.c_str(), squiggle.style);
+					}
+
+					start = end;
+				}
+
+				column = endColumn;
+			}
+
 			// only process all visible columns
 			while (column < endColumn && column <= lastVisibleColumn) {
 				const auto& glyph = line[index++];
@@ -587,6 +642,103 @@ void TextEditor::renderSquiggles() {
 
 
 //
+//	TextEditor::getShapedLine
+//
+
+const TextEditor::ShapedLine* TextEditor::getShapedLine(size_t lineNo) const {
+	if (!config.shaper || !config.shaper->shape || lineNo >= document.size() || !document[lineNo].shaped) {
+		return nullptr;
+	}
+
+	// the layout is found by the line's content and the tab size (a font change clears them all)
+	const auto& line = document[lineNo];
+	uint64_t key = 14695981039346656037ull;
+
+	for (const auto& glyph : line) {
+		key = (key ^ static_cast<uint64_t>(glyph.codepoint)) * 1099511628211ull;
+	}
+
+	key = (key ^ static_cast<uint64_t>(config.tabSize)) * 1099511628211ull;
+	auto it = shapedLines.find(key);
+
+	if (it == shapedLines.end()) {
+		if (shapedLines.size() >= 4096) {
+			shapedLines.clear();
+		}
+
+		ShapedLine shaped;
+		config.shaper->shape(line.data(), line.size(), static_cast<float>(config.tabSize) * glyphSize.x, shaped);
+
+		// a layout without a caret for every position falls back to the grid's
+		if (shaped.carets.size() != line.size() + 1) {
+			shaped.carets.resize(line.size() + 1);
+
+			for (size_t i = 0; i < shaped.carets.size(); i++) {
+				shaped.carets[i] = static_cast<float>(i) * glyphSize.x;
+			}
+		}
+
+		it = shapedLines.emplace(key, std::move(shaped)).first;
+	}
+
+	return &it->second;
+}
+
+
+//
+//	TextEditor::columnToX
+//
+
+float TextEditor::columnToX(size_t row, size_t column) const {
+	if (row < typeSetter.size()) {
+		if (const auto* shaped = getShapedLine(typeSetter[row].line)) {
+			return shaped->carets[std::min(column, shaped->carets.size() - 1)];
+		}
+	}
+
+	return static_cast<float>(column) * glyphSize.x;
+}
+
+
+//
+//	TextEditor::xToColumn
+//
+
+float TextEditor::xToColumn(size_t row, float x) const {
+	if (row < typeSetter.size()) {
+		if (const auto* shaped = getShapedLine(typeSetter[row].line)) {
+			// the glyph whose box holds x, and how far x is from its leading caret
+			// (for a right to left glyph that caret is its right edge)
+			const auto& carets = shaped->carets;
+			const auto count = carets.size() - 1;
+
+			for (size_t i = 0; i < count; i++) {
+				const auto a = carets[i];
+				const auto b = carets[i + 1];
+
+				if (x >= std::min(a, b) && x < std::max(a, b)) {
+					return static_cast<float>(i) + (x - a) / (b - a);
+				}
+			}
+
+			// outside every glyph: the nearest caret
+			size_t nearest = 0;
+
+			for (size_t i = 1; i <= count; i++) {
+				if (std::abs(carets[i] - x) < std::abs(carets[nearest] - x)) {
+					nearest = i;
+				}
+			}
+
+			return static_cast<float>(nearest);
+		}
+	}
+
+	return x / glyphSize.x;
+}
+
+
+//
 //	TextEditor::renderText
 //
 
@@ -612,6 +764,17 @@ void TextEditor::renderText() {
 			index = 0;
 			column = 0;
 			endColumn = line.columns;
+		}
+
+		// a shaped line: its glyphs where the shaper laid them out, each in the color of the
+		// line glyph it was made from (the draw list's clip rectangle does the culling)
+		if (const auto* shaped = getShapedLine(typeSetter[i].line)) {
+			for (const auto& glyph : shaped->glyphs) {
+				const auto color = palette.get(glyph.index < line.size() ? line[glyph.index].color : Color::text);
+				config.shaper->draw(drawList, rowScreenPos, glyph, color);
+			}
+
+			column = endColumn;
 		}
 
 		// only process all visible columns
@@ -659,7 +822,7 @@ void TextEditor::renderText() {
 		// draw ellipsis at the end of folded lines
 		if (i == line.row + line.rows - 1) {
 			if (line.foldingState == FoldingState::folded) {
-				const auto glyphPos = cursorScreenPos + ImVec2(textLeftOffset + typeSetter[i].columns * glyphSize.x, i * glyphSize.y);
+				const auto glyphPos = cursorScreenPos + ImVec2(textLeftOffset + columnToX(i, typeSetter[i].columns), i * glyphSize.y);
 				font->RenderChar(drawList, fontSize, glyphPos, palette.get(Color::text), font->EllipsisChar);
 			}
 		}
@@ -685,9 +848,12 @@ void TextEditor::renderCursorCarets() {
 			if (document[docPos.line].foldingState != FoldingState::hidden) {
 				const auto pos = docPos2VisPos(docPos);
 
-				if (pos.row >= firstVisibleRow && pos.row <= lastVisibleRow && pos.column >= firstVisibleColumn && pos.column <= lastVisibleColumn) {
+				// a shaped line's columns are not on the grid: its caret is culled by the clip rectangle
+				const auto shaped = document[docPos.line].shaped;
+
+				if (pos.row >= firstVisibleRow && pos.row <= lastVisibleRow && (shaped || (pos.column >= firstVisibleColumn && pos.column <= lastVisibleColumn))) {
 					const auto caretVisible = !io.ConfigInputTextCursorBlink || cursorAnimationTimer <= 0.0f || std::fmod(cursorAnimationTimer, 1.2f) <= 0.8f;
-					const auto x = cursorScreenPos.x + textLeftOffset + pos.column * glyphSize.x;
+					const auto x = cursorScreenPos.x + textLeftOffset + columnToX(pos.row, pos.column);
 					const auto y = cursorScreenPos.y + pos.row * glyphSize.y;
 
 					// handle custom caret renderer
@@ -1446,7 +1612,9 @@ void TextEditor::handleMouseInteractions() {
 
 	typeSetter.screenPos2DocPos(
 		document,
-		ImVec2((mousePos.x - textLeftOffset) / glyphSize.x, mousePos.y / glyphSize.y),
+		ImVec2(
+			mousePos.y > 0.0f ? xToColumn(static_cast<size_t>(mousePos.y / glyphSize.y), mousePos.x - textLeftOffset) : (mousePos.x - textLeftOffset) / glyphSize.x,
+			mousePos.y / glyphSize.y),
 		glyphPos,
 		cursorPos);
 
@@ -1971,7 +2139,8 @@ bool TextEditor::isMousePosOverGlyph(const ImVec2& mousePos) const {
 		}
 
 		// convert to visual position and check it
-		const VisPos visPos(static_cast<size_t>(local.y / glyphSize.y), static_cast<size_t>((local.x - textLeftOffset) / glyphSize.x));
+		const auto row = static_cast<size_t>(local.y / glyphSize.y);
+		const VisPos visPos(row, static_cast<size_t>(std::max(xToColumn(row, local.x - textLeftOffset), 0.0f)));
 		return typeSetter.isVisPosOverGlyph(visPos);
 	}
 }
@@ -2014,7 +2183,8 @@ TextEditor::DocPos TextEditor::getDocPosAtMousePos(const ImVec2& mousePos) const
 		}
 
 		// convert to document position
-		const VisPos visPos(static_cast<size_t>(local.y / glyphSize.y), static_cast<size_t>((local.x - textLeftOffset) / glyphSize.x));
+		const auto row = static_cast<size_t>(local.y / glyphSize.y);
+		const VisPos visPos(row, static_cast<size_t>(std::max(xToColumn(row, local.x - textLeftOffset), 0.0f)));
 		return visPos2DocPos(normalizePos(visPos));
 	}
 }
@@ -8204,6 +8374,21 @@ void TextEditor::TypeSetter::wrapLine(Line& line) {
 //
 
 void TextEditor::TypeSetter::updateLine(Line& line) {
+	// a line the application shapes: one column for each glyph, never wrapped
+	line.shaped = shaper && shaper->needsShaping && line.size() && shaper->needsShaping(line.data(), line.size());
+
+	if (line.shaped) {
+		for (auto& glyph : line) {
+			glyph.columns = 1;
+		}
+
+		line.rows = 1;
+		line.columns = line.size();
+		line.sections = nullptr;
+		line.needsTypeSetting = false;
+		return;
+	}
+
 	// update glyph widths
 	size_t columns = 0;
 
@@ -8244,7 +8429,8 @@ bool TextEditor::TypeSetter::update(const Config& config, Document& document, co
 	const bool configChanged =
 		tabSize != config.tabSize ||
 		wordWrap != config.wordWrap ||
-		(wordWrap && wordWrapColumns != config.wordWrapColumns);
+		(wordWrap && wordWrapColumns != config.wordWrapColumns) ||
+		shaper != config.shaper;
 
 	// update all lines on configuration changes
 	if (configChanged) {
@@ -8252,6 +8438,7 @@ bool TextEditor::TypeSetter::update(const Config& config, Document& document, co
 		tabSize = config.tabSize;
 		wordWrap = config.wordWrap;
 		wordWrapColumns = config.wordWrapColumns;
+		shaper = config.shaper;
 
 		// update all the lines
 		for (auto& line : document) {

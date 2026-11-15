@@ -775,6 +775,41 @@ public:
 	// reads facts outside the line (names declared elsewhere, an external schema) that changed
 	inline void Recolorize() { colorizer.invalidate(); }
 
+	// complex scripts (shaping)
+	//
+	// a line the monospace grid can't show properly (Arabic, Hebrew, Devanagari, ...) can be laid
+	// out and drawn by the application through a Shaper. A shaped line has one column for each glyph,
+	// so cursors and selections keep their logical positions, while x positions come from the shaped
+	// layout (cached by the line's content until the font changes). Shaped lines are not word wrapped.
+	struct ShapedGlyph {
+		uint32_t id = 0;		// the shaper's glyph (handed back to draw)
+		uint32_t font = 0;		// the shaper's font (handed back to draw)
+		size_t index = 0;		// the line glyph it was made from (its color)
+		float x = 0.0f;			// pen position from the start of the line, in pixels
+		float offsetX = 0.0f;	// placement offsets, in pixels (y down)
+		float offsetY = 0.0f;
+	};
+
+	struct ShapedLine {
+		std::vector<ShapedGlyph> glyphs;	// in drawing order
+		std::vector<float> carets;			// x of the caret before each line glyph, then after the last (size() + 1)
+	};
+
+	struct Shaper {
+		// does a line need shaping
+		std::function<bool(const Glyph* glyphs, size_t count)> needsShaping;
+
+		// lay a line out in the current font and size (a tab advances tabWidth pixels)
+		std::function<void(const Glyph* glyphs, size_t count, float tabWidth, ShapedLine& out)> shape;
+
+		// draw a glyph; origin is the line's top left corner on the screen
+		std::function<void(ImDrawList* drawList, ImVec2 origin, const ShapedGlyph& glyph, ImU32 color)> draw;
+	};
+
+	// the shaper must outlive its use by the editor (nullptr: every line on the grid)
+	inline void SetShaper(const Shaper* value) { config.shaper = value; shapedLines.clear(); }
+	inline const Shaper* GetShaper() const { return config.shaper; }
+
 	// access language registry
 
 	// add a language definition to the registry
@@ -1086,6 +1121,9 @@ protected:
 		// language support
 		const Language* language = nullptr;
 
+		// complex script support (nullptr: every line on the grid)
+		const Shaper* shaper = nullptr;
+
 		// word wrap limits
 		size_t wordWrapColumns = 0;
 	} config;
@@ -1160,6 +1198,7 @@ protected:
 
 		// typesetting state maintained by the TypeSetter overlay
 		bool needsTypeSetting = true;
+		bool shaped = false; // laid out by the shaper: one column for each glyph
 		size_t row = 0;
 		size_t rows = 0;
 		size_t columns = 0;
@@ -1822,6 +1861,7 @@ protected:
 		size_t tabSize = 0;
 		bool wordWrap = false;
 		size_t wordWrapColumns = 0;
+		const Shaper* shaper = nullptr;
 		bool updated = false;
 
 		size_t totalRows = 0;
@@ -2180,6 +2220,15 @@ protected:
 	bool findReplaceVisible = false;
 	bool focusOnEditor = false;
 	bool focused = false;
+
+	// complex script layouts: the shaped layout of a line (nullptr if it isn't shaped), the x of a
+	// column on a row and the (fractional) column at an x -- the grid, or the shaped line's carets
+	const ShapedLine* getShapedLine(size_t line) const;
+	float columnToX(size_t row, size_t column) const;
+	float xToColumn(size_t row, float x) const;
+	mutable std::unordered_map<uint64_t, ShapedLine> shapedLines; // by the line's content
+	ImFont* shapedFont = nullptr;
+	float shapedFontSize = 0.0f;
 	bool focusOnFind = false;
 	bool findCancelledAutocomplete = false;
 	std::string findText;
