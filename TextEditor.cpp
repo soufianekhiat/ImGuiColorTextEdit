@@ -160,6 +160,10 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 		// handle mouse inputs (unless an inline widget owns the mouse this frame)
 		if (!(config.inlineWidgets && config.inlineWidgets->mouse && config.inlineWidgets->mouse())) {
 			handleMouseInteractions();
+
+		} else {
+			// the widget may have edited the text: lay it out again before it is drawn
+			documentChanged = updateState() || documentChanged;
 		}
 
 		// determine visible row/column limits
@@ -814,6 +818,7 @@ void TextEditor::renderText() {
 
 		// only process all visible columns
 		while (column < endColumn && column <= lastVisibleColumn) {
+			IM_ASSERT(index < line.size() && "line edited after it was laid out");
 			const auto& glyph = line[index++];
 			const auto codepoint = glyph.codepoint;
 			const ImVec2 glyphPos(rowScreenPos.x + (column + glyph.inlay) * glyphSize.x, rowScreenPos.y); // after its room
