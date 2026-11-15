@@ -9212,12 +9212,16 @@ bool TextEditor::AutoComplete::render(Document& document, Cursors& cursors, Type
 		}
 	}
 
-	// open popup window
+	// open popup window, under the cursor and kept inside the viewport
 	bool result = false;
 	const auto pos = typesetter.docPos2VisPos(document, currentLocation);
+	const auto popupWidth = configuration.suggestionWidth * glyphSize.x;
+	const auto* viewport = ImGui::GetWindowViewport();
+	auto popupX = ImGui::GetCursorScreenPos().x + textOffset + pos.column * glyphSize.x;
+	popupX = std::max(viewport->WorkPos.x, std::min(popupX, viewport->WorkPos.x + viewport->WorkSize.x - popupWidth));
 
 	ImGui::SetNextWindowPos(ImVec2(
-		ImGui::GetCursorScreenPos().x + textOffset + pos.column * glyphSize.x,
+		popupX,
 		ImGui::GetCursorScreenPos().y + (pos.row + 1) * glyphSize.y));
 
 	const auto suggestions = state.suggestions.size();
@@ -9230,7 +9234,7 @@ bool TextEditor::AutoComplete::render(Document& document, Cursors& cursors, Type
 	const auto visibleSuggestions = (suggestions == 0) ? 1 : std::min(static_cast<size_t>(10), suggestions);
 	const auto& style = ImGui::GetStyle();
 	const auto height = ImGui::GetFrameHeightWithSpacing() * visibleSuggestions + style.WindowPadding.y * 2.0f;
-	ImGui::SetNextWindowSize(ImVec2(configuration.suggestionWidth * glyphSize.x, height));
+	ImGui::SetNextWindowSize(ImVec2(popupWidth, height));
 
 	const ImGuiWindowFlags flags =
 		ImGuiWindowFlags_NoFocusOnAppearing |
