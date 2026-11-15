@@ -289,13 +289,30 @@ void TextEditor::renderCurrentLineHighlight() {
 
 
 //
+//	TextEditor::getActiveBrackets
+//
+
+TextEditor::Bracketeer::const_iterator TextEditor::getActiveBrackets() {
+	const auto pos = cursors.getMain().getInteractiveEnd();
+
+	if (activeBracketsVersion != bracketeer.getVersion() || activeBracketsPos != pos) {
+		activeBracketsVersion = bracketeer.getVersion();
+		activeBracketsPos = pos;
+		activeBracketsIndex = static_cast<size_t>(bracketeer.getEnclosingBrackets(pos) - bracketeer.cbegin());
+	}
+
+	return bracketeer.cbegin() + activeBracketsIndex;
+}
+
+
+//
 //	TextEditor::renderActiveBracketBackground
 //
 
 void TextEditor::renderActiveBracketBackground() {
 	if (config.showMatchingBrackets && bracketeer.size()) {
 		// render active bracket pair
-		const auto active = bracketeer.getEnclosingBrackets(cursors.getMain().getInteractiveEnd());
+		const auto active = getActiveBrackets();
 
 		if (active != bracketeer.end() && active->visible) {
 			if (document[active->start.line].foldingState != FoldingState::hidden) {
@@ -458,10 +475,22 @@ void TextEditor::renderTextMarkers() {
 
 void TextEditor::renderMatchingBracketLines() {
 	if (config.showMatchingBrackets && bracketeer.size()) {
-		const auto active = bracketeer.getEnclosingBrackets(cursors.getMain().getInteractiveEnd());
+		const auto active = getActiveBrackets();
+		const auto firstLine = typeSetter[firstVisibleRow].line;
+		const auto lastLine = typeSetter[lastVisibleRow].line;
 
-		// render bracket pair lines
-		for (auto bracket = bracketeer.begin(); bracket < bracketeer.end(); bracket++) {
+		// render bracket pair lines: only pairs on different lines get one, and only the ones in view
+		for (const auto index : bracketeer.getSpans()) {
+			const auto bracket = bracketeer.cbegin() + index;
+
+			if (bracket->start.line > lastLine) {
+				break;
+			}
+
+			if (bracket->end.line < firstLine) {
+				continue;
+			}
+
 			if (bracket->visible &&
 				document[bracket->start.line].foldingState != FoldingState::folded &&
 				document[bracket->start.line].foldingState != FoldingState::hidden) {
@@ -1318,8 +1347,8 @@ void TextEditor::renderPopups() {
 bool TextEditor::updateState() {
 	// this function gets called to handle possible changes caused by the API or user interactions
 	// the overlays determine what they need to do to update their state (could be nothing)
-	colorizer.update(config, document);
-	bracketeer.update(config, document);
+	const auto recolored = colorizer.update(config, document);
+	bracketeer.update(config, document, recolored, colorizer.getLastColorized());
 	lineFold.update(config, document, bracketeer);
 	cursors.update(document);
 
@@ -3868,6 +3897,7 @@ TextEditor::DocPos TextEditor::Document::insertText(const Config& config, DocPos
 	for (auto j = start.line; j <= end.line; j++) {
 		at(j).needsColorizing = true;
 		at(j).needsTypeSetting = true;
+		markChanged(j);
 	}
 
 	// calculate line indents
@@ -3912,6 +3942,7 @@ void TextEditor::Document::deleteText(const Config& config, DocPos start, DocPos
 	// mark line and document as changed
 	at(start.line).needsColorizing = true;
 	at(start.line).needsTypeSetting = true;
+	markChanged(start.line);
 
 	// calculate line indents
 	updateIndents(config, start.line, start.line);
@@ -4631,6 +4662,7 @@ TextEditor::DocPos TextEditor::Document::getRightAfterHiddenLines(DocPos pos) co
 //
 
 void TextEditor::Document::appendLine() {
+	structureChanged = true;
 	auto& line = emplace_back();
 
 	if (insertor) {
@@ -4644,6 +4676,7 @@ void TextEditor::Document::appendLine() {
 //
 
 void TextEditor::Document::insertLine(size_t offset) {
+	structureChanged = true;
 	const auto line = insert(begin() + offset, Line());
 
 	if (insertor) {
@@ -4657,6 +4690,8 @@ void TextEditor::Document::insertLine(size_t offset) {
 //
 
 void TextEditor::Document::deleteLines(size_t start, size_t end) {
+	structureChanged = true;
+
 	if (deletor) {
 		for (auto i = start; i <= end; i++) {
 			deletor(i, at(i).userData);
@@ -4672,6 +4707,8 @@ void TextEditor::Document::deleteLines(size_t start, size_t end) {
 //
 
 void TextEditor::Document::clearDocument() {
+	structureChanged = true;
+
 	if (deletor) {
 		for (size_t i = 0; i < size(); i++) {
 			deletor(i, at(i).userData);
@@ -5199,10 +5236,24 @@ bool TextEditor::Colorizer::update(const Config& config, Document& document) {
 			}
 		}
 
-	// update changed lines when document is updated
+	// update changed lines when document is updated: when no line was inserted or deleted, only the
+	// lines from the first changed one, up to the last changed one and as far as a state change carries
 	} else if (document.isUpdated()) {
-		for (auto line = document.begin(); line < document.end(); line++) {
+		const auto structural = document.isStructureChanged();
+		const size_t first = structural ? 0 : document.getFirstChangedLine();
+		const size_t last = structural ? document.size() - 1 : document.getLastChangedLine();
+		lastColorized = 0;
+
+		for (auto i = first; i < document.size(); i++) {
+			const auto line = document.begin() + i;
+
+			if (i > last && !line->needsColorizing) {
+				break;
+			}
+
 			if (line->needsColorizing) {
+				lastColorized = i;
+
 				if (language) {
 					const auto state = updateLine(*line);
 					line->needsColorizing = false;
@@ -5234,7 +5285,7 @@ bool TextEditor::Colorizer::update(const Config& config, Document& document) {
 //	TextEditor::Bracketeer::update
 //
 
-void TextEditor::Bracketeer::update(const Config& config, Document& document) {
+void TextEditor::Bracketeer::update(const Config& config, Document& document, bool recolored, size_t lastColorized) {
 	// see if the configuration changed
 	const bool configChanged =
 		showMatchingBrackets != config.showMatchingBrackets ||
@@ -5246,6 +5297,8 @@ void TextEditor::Bracketeer::update(const Config& config, Document& document) {
 	if (configChanged && !showMatchingBrackets) {
 		// if configuration changed, clear the bracket pair list
 		clear();
+		tokens.clear();
+		updateSpans();
 
 		// and reset glyph colors
 		for (size_t line = 0; line < document.size(); line++) {
@@ -5262,53 +5315,73 @@ void TextEditor::Bracketeer::update(const Config& config, Document& document) {
 			}
 		}
 
-	} else if (showMatchingBrackets && (configChanged || document.isUpdated())) {
-		// if configuration or document changed, recalculate bracket pair list
-		static const Color bracketColors[] = {
-			Color::matchingBracketLevel1,
-			Color::matchingBracketLevel2,
-			Color::matchingBracketLevel3
-		};
+	} else if (showMatchingBrackets && (configChanged || recolored || document.isUpdated())) {
+		// an edit that inserted or deleted no line and left the brackets of every line it changed as
+		// they were (typing in a line, mostly): the pairs stay, their brackets only move along their lines
+		if (!configChanged && !recolored && !document.isStructureChanged() &&
+			!(language && language->indentationForBlocks) && tokens.size() == document.size()) {
 
-		// copy old list so we can see if things have changed
-		const auto previous = *this;
+			const auto first = document.getFirstChangedLine();
+			const auto last = std::max(document.getLastChangedLine(), lastColorized);
+
+			if (first > last || moveTokens(document, first, last)) {
+				version++;
+				updated = false;
+				return;
+			}
+		}
+
+		// otherwise recalculate bracket pair list, copying the old list so we can see if things have changed
+		const std::vector<BracketPair> previous(begin(), end());
 
 		// clear old list
 		clear();
 		std::vector<size_t> levels;
 		size_t level = 0;
 
+		tokens.resize(document.size());
+
+		for (auto& line : tokens) {
+			line.clear();
+		}
+
 		// process all the glyphs
 		for (size_t line = 0; line < document.size(); line++) {
 			for (size_t index = 0; index < document[line].size(); index++) {
 				auto& glyph = document[line][index];
+
+				if (isBracket(glyph)) {
+					tokens[line].push_back(Token{glyph.codepoint, index, noPair, false});
+				}
 
 				// handle a "bracket opener" that is not in a comment, string or preprocessor statement
 				if (isBracketCandidate(glyph) && CodePoint::isBracketOpener(glyph.codepoint)) {
 					// start a new level
 					levels.emplace_back(size());
 					emplace_back(glyph.codepoint, DocPos(line, index), static_cast<ImWchar>(0), DocPos(0, 0), level, true);
-					glyph.color = bracketColors[level % 3];
+					glyph.color = levelColor(level);
 					level++;
 
 				// handle a "bracket closer" that is not in a comment, string or preprocessor statement
 				} else if (isBracketCandidate(glyph) && CodePoint::isBracketCloser(glyph.codepoint)) {
 					if (levels.size()) {
-						auto& lastBracket = at(levels.back());
+						const auto lastIndex = levels.back();
+						auto& lastBracket = at(lastIndex);
 						levels.pop_back();
 						level--;
 
 						if (lastBracket.startChar == CodePoint::toPairOpener(glyph.codepoint)) {
 							// handle matching bracket
-							glyph.color = bracketColors[level % 3];
+							glyph.color = levelColor(level);
 							lastBracket.endChar = glyph.codepoint;
 							lastBracket.end = DocPos(line, index);
 
 						} else {
-							// no matching bracket, mark brackets as errors
+							// no matching bracket, mark brackets as errors and drop the opener (pairs
+							// closed inside it come after it in the list: it is not the last one)
 							glyph.color = Color::matchingBracketError;
 							document[lastBracket.start.line][lastBracket.start.index].color = Color::matchingBracketError;
-							pop_back();
+							erase(begin() + lastIndex);
 						}
 
 					// this is a closer without an opener
@@ -5361,8 +5434,116 @@ void TextEditor::Bracketeer::update(const Config& config, Document& document) {
 			});
 		}
 
-		updated = previous != *this;
+		linkTokens();
+		updateSpans();
+		updated = previous != static_cast<const std::vector<BracketPair>&>(*this);
 	}
+}
+
+
+//
+//	TextEditor::Bracketeer::moveTokens
+//
+
+bool TextEditor::Bracketeer::moveTokens(Document& document, size_t first, size_t last) {
+	// every changed line must hold the same brackets in the same order
+	for (auto line = first; line <= last; line++) {
+		const auto& glyphs = document[line];
+		const auto& kept = tokens[line];
+		size_t count = 0;
+
+		for (const auto& glyph : glyphs) {
+			if (isBracket(glyph)) {
+				if (count == kept.size() || kept[count].codepoint != glyph.codepoint) {
+					return false;
+				}
+
+				count++;
+			}
+		}
+
+		if (count != kept.size()) {
+			return false;
+		}
+	}
+
+	// then they move to where they are now, with the colors recoloring took from them
+	for (auto line = first; line <= last; line++) {
+		auto& glyphs = document[line];
+		auto token = tokens[line].begin();
+
+		for (size_t index = 0; index < glyphs.size(); index++) {
+			auto& glyph = glyphs[index];
+
+			if (isBracket(glyph)) {
+				token->index = index;
+
+				if (token->pair == noPair) {
+					glyph.color = Color::matchingBracketError;
+
+				} else {
+					auto& pair = at(token->pair);
+					(token->isStart ? pair.start : pair.end).index = index;
+					glyph.color = levelColor(pair.level);
+				}
+
+				token++;
+			}
+		}
+	}
+
+	return true;
+}
+
+
+//
+//	TextEditor::Bracketeer::linkTokens
+//
+
+void TextEditor::Bracketeer::linkTokens() {
+	// each pair's two brackets know it (blocks of indentation based languages have none)
+	const auto link = [this](DocPos pos, size_t pair, bool isStart) {
+		auto& line = tokens[pos.line];
+
+		const auto token = std::lower_bound(line.begin(), line.end(), pos.index, [](const Token& t, size_t index) {
+			return t.index < index;
+		});
+
+		if (token != line.end() && token->index == pos.index) {
+			token->pair = pair;
+			token->isStart = isStart;
+		}
+	};
+
+	for (size_t i = 0; i < size(); i++) {
+		const auto& pair = at(i);
+
+		if (pair.startChar) {
+			link(pair.start, i, true);
+		}
+
+		if (pair.endChar) {
+			link(pair.end, i, false);
+		}
+	}
+}
+
+
+//
+//	TextEditor::Bracketeer::updateSpans
+//
+
+void TextEditor::Bracketeer::updateSpans() {
+	// a frame draws lines for the pairs in view: it walks these instead of every pair
+	spans.clear();
+
+	for (size_t i = 0; i < size(); i++) {
+		if (at(i).end.line > at(i).start.line) {
+			spans.emplace_back(i);
+		}
+	}
+
+	version++;
 }
 
 
@@ -5371,6 +5552,32 @@ void TextEditor::Bracketeer::update(const Config& config, Document& document) {
 //
 
 TextEditor::Bracketeer::const_iterator TextEditor::Bracketeer::getEnclosingBrackets(DocPos location) const {
+	// the pairs are sorted by start: walk back from the last one starting before the location; the
+	// innermost pair around it is the first one met that ends at or after it, and one that ends before
+	// it rules out every earlier pair of its level or deeper (any of those around the location would
+	// hold it too, so be shallower) -- the blocks of indentation based languages all have level 0
+	if (!(language && language->indentationForBlocks)) {
+		auto i = std::lower_bound(cbegin(), cend(), location, [](const BracketPair& pair, DocPos at) {
+			return pair.start < at;
+		});
+
+		size_t ceiling = std::numeric_limits<size_t>::max();
+
+		while (i != cbegin() && ceiling) {
+			i--;
+
+			if (i->level < ceiling) {
+				if (i->end >= location) {
+					return i;
+				}
+
+				ceiling = i->level;
+			}
+		}
+
+		return cend();
+	}
+
 	auto brackets = cend();
 	bool done = false;
 
@@ -5935,7 +6142,8 @@ bool TextEditor::MiniMap::update(const Config& config, const Document& document,
 		showMiniMap = config.showMiniMap;
 	}
 
-	if (configChanged || typeSetter.isUpdated()) {
+	// a hidden minimap is built when it is shown (a configuration change)
+	if (showMiniMap && (configChanged || typeSetter.isUpdated())) {
 		// reset state
 		const auto rowCount = typeSetter.getRowCount();
 		rows.clear();
@@ -8444,6 +8652,47 @@ bool TextEditor::TypeSetter::update(const Config& config, Document& document, co
 		for (auto& line : document) {
 			updateLine(line);
 		}
+
+	// an edit that inserted or deleted no line, without word wrap or a folding change: the rows stay,
+	// only the changed lines' widths change
+	} else if (document.isUpdated() && !document.isStructureChanged() && !wordWrap && !lineFold.isUpdated()) {
+		const auto first = document.getFirstChangedLine();
+		const auto last = std::min(document.getLastChangedLine(), document.size() - 1);
+		bool narrowed = false;
+
+		for (auto i = first; i <= last; i++) {
+			auto& line = document[i];
+
+			if (line.needsTypeSetting) {
+				const auto before = line.columns;
+				updateLine(line);
+
+				if (line.foldingState != FoldingState::hidden) {
+					at(line.row).columns = line.columns;
+
+					if (line.columns >= totalColumns) {
+						totalColumns = line.columns;
+
+					} else if (before == totalColumns) {
+						narrowed = true;
+					}
+				}
+			}
+		}
+
+		// the widest line got narrower: the widest is to be found again
+		if (narrowed) {
+			totalColumns = 0;
+
+			for (const auto& line : document) {
+				if (line.foldingState != FoldingState::hidden) {
+					totalColumns = std::max(totalColumns, line.columns);
+				}
+			}
+		}
+
+		updated = true;
+		return updated;
 
 	// update changed lines when document is updated
 	} else if (document.isUpdated()) {

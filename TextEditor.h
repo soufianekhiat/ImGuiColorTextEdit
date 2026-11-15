@@ -615,6 +615,9 @@ public:
 	static const Palette& GetDarkPalette();
 	static const Palette& GetLightPalette();
 
+	// the color a glyph was given (by the language and the bracket matching)
+	inline Color GetGlyphColor(DocPos pos) const { return document.getColor(normalizePos(pos)); }
+
 	// line break options
 	enum class BreakOption : char {
 		mustBreak,
@@ -1435,7 +1438,20 @@ protected:
 
 		// see if document was updated this frame
 		inline bool isUpdated() const { return updated; }
-		inline void resetUpdated() { updated = false; }
+
+		inline void resetUpdated() {
+			updated = false;
+			structureChanged = false;
+			firstChangedLine = std::numeric_limits<size_t>::max();
+			lastChangedLine = 0;
+		}
+
+		// what changed since the last reset: whether lines were inserted or deleted (then line
+		// numbers moved and the whole document must be seen as changed) and, if not, the first
+		// and last line an edit changed (none when the first is past the last)
+		inline bool isStructureChanged() const { return structureChanged; }
+		inline size_t getFirstChangedLine() const { return firstChangedLine; }
+		inline size_t getLastChangedLine() const { return lastChangedLine; }
 
 		// line-based callbacks
 		inline void setInsertor(std::function<void*(size_t line)> callback) { insertor = callback; }
@@ -1472,6 +1488,14 @@ protected:
 
 	private:
 		bool updated = false;
+		bool structureChanged = true;
+		size_t firstChangedLine = std::numeric_limits<size_t>::max();
+		size_t lastChangedLine = 0;
+
+		inline void markChanged(size_t line) {
+			firstChangedLine = std::min(firstChangedLine, line);
+			lastChangedLine = std::max(lastChangedLine, line);
+		}
 
 		std::function<void*(size_t)> insertor;
 		std::function<void(size_t, void*)> deletor;
@@ -1691,9 +1715,13 @@ protected:
 		// recolor every line on the next update, as a language change does
 		inline void invalidate() { invalidated = true; }
 
+		// the last line the last update recolored (a state change carries recoloring past the edit)
+		inline size_t getLastColorized() const { return lastColorized; }
+
 	private:
 		// a full pass is owed (invalidate)
 		bool invalidated = false;
+		size_t lastColorized = 0;
 
 		// update color in a single line
 		LineState updateLine(Line& line);
@@ -1734,8 +1762,9 @@ protected:
 	// invisible brackets are for languages who's blocks are indent based (e.g. Python)
 	class Bracketeer : public std::vector<BracketPair> {
 	public:
-		// update state (if required)
-		void update(const Config& config, Document& document);
+		// update state (if required); `recolored` says every line was recolored (the pairs are then
+		// found again), `lastColorized` how far the recoloring of an edit went
+		void update(const Config& config, Document& document, bool recolored, size_t lastColorized);
 
 		// find relevant brackets
 		const_iterator getEnclosingBrackets(DocPos location) const;
@@ -1745,6 +1774,12 @@ protected:
 		// see if bracketeer was updated this frame
 		inline bool isUpdated() const { return updated; }
 		inline void resetUpdated() { updated = false; }
+
+		// the indices of the pairs whose brackets are on different lines, by start
+		inline const std::vector<size_t>& getSpans() const { return spans; }
+
+		// changes every time the pairs are rebuilt (what a cached lookup is valid for)
+		inline size_t getVersion() const { return version; }
 
 		// utility functions
 		static inline bool isBracketCandidate(const Glyph& glyph) {
@@ -1756,9 +1791,38 @@ protected:
 		}
 
 	private:
+		void updateSpans();
+
+		// a bracket glyph on a line: its codepoint, where it is and the pair it belongs to (if any)
+		struct Token {
+			ImWchar codepoint;
+			size_t index;
+			size_t pair;
+			bool isStart;
+		};
+
+		static constexpr size_t noPair = std::numeric_limits<size_t>::max();
+
+		// the bracket glyphs of every line, kept so an edit that leaves a line's sequence of
+		// brackets as it was only moves them (false when the pairs must be found again)
+		bool moveTokens(Document& document, size_t first, size_t last);
+		void linkTokens();
+
+		static inline bool isBracket(const Glyph& glyph) {
+			return isBracketCandidate(glyph) && (CodePoint::isBracketOpener(glyph.codepoint) || CodePoint::isBracketCloser(glyph.codepoint));
+		}
+
+		static inline Color levelColor(size_t level) {
+			static const Color colors[] = {Color::matchingBracketLevel1, Color::matchingBracketLevel2, Color::matchingBracketLevel3};
+			return colors[level % 3];
+		}
+
 		bool showMatchingBrackets = false;
 		const Language* language = nullptr;
 		bool updated = false;
+		std::vector<size_t> spans;
+		size_t version = 0;
+		std::vector<std::vector<Token>> tokens;
 	} bracketeer;
 
 	// captured a single line fold opportunity
@@ -2229,6 +2293,13 @@ protected:
 	mutable std::unordered_map<uint64_t, ShapedLine> shapedLines; // by the line's content
 	ImFont* shapedFont = nullptr;
 	float shapedFontSize = 0.0f;
+
+	// the pair around the main cursor, looked up again only when the cursor or the pairs change
+	Bracketeer::const_iterator getActiveBrackets();
+	size_t activeBracketsVersion = static_cast<size_t>(-1);
+	DocPos activeBracketsPos;
+	size_t activeBracketsIndex = 0;
+
 	bool focusOnFind = false;
 	bool findCancelledAutocomplete = false;
 	std::string findText;
