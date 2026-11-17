@@ -1568,6 +1568,16 @@ void TextEditor::handleKeyboardInputs() {
 		else if (config.findReplaceEnabled && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F)) { findAll(); }
 		else if (config.findReplaceEnabled && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G, ImGuiInputFlags_Repeat)) { findNext(); }
 
+		// go to definition
+		else if (goToDefinitionCallback && ImGui::Shortcut(ImGuiMod_Alt | ImGuiKey_G)) {
+			DocPos start;
+			const auto identifier = getIdentifierAt(getCursorPosition(cursors.getMainIndex()), &start);
+
+			if (!identifier.empty()) {
+				goToDefinitionCallback(identifier, start);
+			}
+		}
+
 		// autocomplete support (the main cursor's word is completed at every cursor)
 		else if (!config.readOnly && ImGui::Shortcut(autocomplete.getTriggerShortcut())) {
 			if (autocomplete.startShortcut(cursors)) {
@@ -2273,6 +2283,60 @@ std::string TextEditor::getWordAtMousePos(const ImVec2& mousePos) const {
 	} else {
 		return "";
 	}
+}
+
+
+//
+//	TextEditor::getIdentifierAt
+//
+
+std::string TextEditor::getIdentifierAt(DocPos pos, DocPos* start) const {
+	const auto& line = document[pos.line];
+	auto isIdentifier = [&](size_t index) { return index < line.size() && CodePoint::isWord(line[index].codepoint); };
+
+	// on the identifier, or right after it
+	auto index = pos.index;
+
+	if (!isIdentifier(index) && index > 0 && isIdentifier(index - 1)) {
+		index--;
+	}
+
+	if (!isIdentifier(index)) {
+		return "";
+	}
+
+	auto first = index;
+	auto last = index;
+
+	while (first > 0 && isIdentifier(first - 1)) {
+		first--;
+	}
+
+	while (isIdentifier(last + 1)) {
+		last++;
+	}
+
+	// the qualifiers before it: a::b::c
+	while (first >= 3 && line[first - 1].codepoint == ':' && line[first - 2].codepoint == ':' && isIdentifier(first - 3)) {
+		first -= 3;
+
+		while (first > 0 && isIdentifier(first - 1)) {
+			first--;
+		}
+	}
+
+	std::string identifier;
+	char utf8[4];
+
+	for (auto i = first; i <= last; i++) {
+		identifier.append(utf8, CodePoint::write(utf8, line[i].codepoint));
+	}
+
+	if (start) {
+		*start = DocPos(pos.line, first);
+	}
+
+	return identifier;
 }
 
 

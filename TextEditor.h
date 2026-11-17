@@ -550,6 +550,17 @@ public:
 	inline void ClearTextHoverCallback() { SetTextHoverCallback(nullptr); }
 	inline bool HasTextHoverCallback() const { return textHoverCallback != nullptr; }
 
+	// go to definition: Alt+G calls the application with the identifier under the main cursor,
+	// qualified when it follows "::" (the cursor on load in normal::load gives "normal::load"),
+	// and where it starts; the application finds the definition (extras/SourceIndex can) and
+	// shows it, in this editor or another one (best after Render returns, not in the callback)
+	inline void SetGoToDefinitionCallback(std::function<void(const std::string& identifier, DocPos start)> callback) { goToDefinitionCallback = callback; }
+	inline void ClearGoToDefinitionCallback() { SetGoToDefinitionCallback(nullptr); }
+	inline bool HasGoToDefinitionCallback() const { return goToDefinitionCallback != nullptr; }
+
+	// the identifier at a position as go to definition sees it ("" when there is none) and where it starts
+	inline std::string GetIdentifierAt(DocPos pos, DocPos* start=nullptr) const { return getIdentifierAt(normalizePos(pos), start); }
+
 	// line folding support (only works when line folding is activated)
 	inline void FoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.foldAroundLine(document, normalizeLine(line)); } }
 	inline void UnfoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.unfoldAroundLine(document, normalizeLine(line)); } }
@@ -2172,6 +2183,7 @@ protected:
 	bool isMousePosOverTextArea(const ImVec2& mousePos) const;
 	DocPos getDocPosAtMousePos(const ImVec2& mousePos) const;
 	std::string getWordAtMousePos(const ImVec2& mousePos) const;
+	std::string getIdentifierAt(DocPos pos, DocPos* start) const;
 
 	// scrolling support
 	void setCursor(DocPos pos);
@@ -2333,6 +2345,7 @@ protected:
 	std::function<void(PopupData& data)> lineNumberContextMenuCallback;
 	std::function<void(PopupData& data)> textContextMenuCallback;
 	std::function<void(PopupData& data)> textHoverCallback;
+	std::function<void(const std::string& identifier, DocPos start)> goToDefinitionCallback;
 	ImVec2 popupWindowPos;
 	DocPos popupDocPos;
 
