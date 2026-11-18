@@ -851,7 +851,35 @@ void TextEditor::renderText() {
 
 			// handle regular glyphs
 			} else {
-				if (column >= firstRenderableColumn) {
+				const auto* ligature = ligatures.empty() ? nullptr : ligatureAt(typeSetter[i].line, index - 1);
+				auto columns = static_cast<size_t>(glyph.columns);
+
+				if (ligature) {
+					for (size_t k = 1; k < ligature->sequence.size(); k++) {
+						columns += line[index - 1 + k].columns;
+					}
+
+					// not across a wrap
+					if (column + columns > endColumn) {
+						ligature = nullptr;
+					}
+				}
+
+				if (ligature) {
+					// one glyph centred over the sequence's columns, which are skipped
+					index += ligature->sequence.size() - 1;
+
+					if (column >= firstRenderableColumn) {
+						char utf8[4];
+						const auto size = CodePoint::write(utf8, ligature->glyph);
+						const auto width = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, utf8, utf8 + size).x;
+						const auto x = glyphPos.x + (static_cast<float>(columns) * glyphSize.x - width) * 0.5f;
+						font->RenderChar(drawList, fontSize, ImVec2(x, glyphPos.y), palette.get(glyph.color), ligature->glyph);
+					}
+
+					column += columns - glyph.columns;
+
+				} else if (column >= firstRenderableColumn) {
 					font->RenderChar(drawList, fontSize, glyphPos, palette.get(glyph.color), codepoint);
 				}
 			}
@@ -2306,7 +2334,15 @@ std::string TextEditor::getWordAtMousePos(const ImVec2& mousePos) const {
 
 std::string TextEditor::getIdentifierAt(DocPos pos, DocPos* start) const {
 	const auto& line = document[pos.line];
-	auto isIdentifier = [&](size_t index) { return index < line.size() && CodePoint::isWord(line[index].codepoint); };
+	// a word character, or a glyph beyond ASCII that is not white space (a name written with a sign: the root sign and 2)
+	auto isIdentifier = [&](size_t index) {
+		if (index >= line.size()) {
+			return false;
+		}
+
+		const auto codepoint = line[index].codepoint;
+		return CodePoint::isWord(codepoint) || (codepoint >= 0x80 && !CodePoint::isWhiteSpace(codepoint));
+	};
 
 	// on the identifier, or right after it
 	auto index = pos.index;
@@ -3007,6 +3043,87 @@ void TextEditor::autoReplace(ImWchar character) {
 	}
 
 	endTransaction(transaction);
+}
+
+
+//
+//	TextEditor::SetLigatures
+//
+
+void TextEditor::SetLigatures(const std::vector<std::pair<std::string, std::string>>& pairs) {
+	ligatures.clear();
+
+	for (auto& [sequence, glyph] : pairs) {
+		Ligature ligature;
+		const std::string_view text(sequence);
+
+		for (auto i = text.begin(); i < text.end();) {
+			ImWchar codepoint;
+			i = CodePoint::read(i, text.end(), &codepoint);
+			ligature.sequence.push_back(codepoint);
+		}
+
+		const std::string_view drawn(glyph);
+		ligature.glyph = 0;
+
+		if (!drawn.empty()) {
+			CodePoint::read(drawn.begin(), drawn.end(), &ligature.glyph);
+		}
+
+		if (ligature.sequence.size() > 1 && ligature.glyph) {
+			ligatures.push_back(ligature);
+		}
+	}
+
+	std::stable_sort(ligatures.begin(), ligatures.end(), [](const Ligature& a, const Ligature& b) {
+		return a.sequence.size() > b.sequence.size();
+	});
+}
+
+
+//
+//	TextEditor::ligatureAt
+//
+
+const TextEditor::Ligature* TextEditor::ligatureAt(size_t lineIndex, size_t index) const {
+	const auto& line = document[lineIndex];
+
+	if (line[index].color == Color::comment || line[index].color == Color::string) {
+		return nullptr;
+	}
+
+	static constexpr std::string_view operators = "<>=!-+*/%&|^~:?.";
+	auto isOperator = [&](size_t i) {
+		const auto codepoint = line[i].codepoint;
+		return codepoint < 0x80 && operators.find(static_cast<char>(codepoint)) != std::string_view::npos;
+	};
+
+	if (index > 0 && isOperator(index - 1)) {
+		return nullptr;
+	}
+
+	for (const auto& ligature : ligatures) {
+		const auto size = ligature.sequence.size();
+		auto match = index + size <= line.size() && !(index + size < line.size() && isOperator(index + size));
+
+		for (size_t k = 0; match && k < size; k++) {
+			match = line[index + k].codepoint == ligature.sequence[k];
+		}
+
+		if (match) {
+			for (const auto& cursor : cursors) {
+				const auto at = cursor.getInteractiveEnd();
+
+				if (at.line == lineIndex && at.index > index && at.index < index + size) {
+					return nullptr;
+				}
+			}
+
+			return font->IsGlyphInFont(ligature.glyph) ? &ligature : nullptr;
+		}
+	}
+
+	return nullptr;
 }
 
 

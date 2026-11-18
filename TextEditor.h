@@ -582,6 +582,14 @@ public:
 	inline void SetAutoReplacements(const std::vector<std::pair<std::string, std::string>>& replacements) { autoReplacements = replacements; }
 	inline const std::vector<std::pair<std::string, std::string>>& GetAutoReplacements() const { return autoReplacements; }
 
+	// ligatures: character sequences drawn as one glyph centred over their columns, as programming fonts
+	// with ligatures show operators ("<=" as the less-than-or-equal sign, "!=" as the not-equal sign);
+	// pairs of (sequence, glyph) in UTF-8. The text keeps its characters: carets and selections step
+	// through them, and a sequence with a caret inside is drawn as its characters. A sequence shows as its
+	// glyph in code (not comments or strings) when it is a whole run of operator characters ("<=" in
+	// "a <= b", not in "a <<= b") and the font has the glyph.
+	void SetLigatures(const std::vector<std::pair<std::string, std::string>>& ligatures);
+
 	// line folding support (only works when line folding is activated)
 	inline void FoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.foldAroundLine(document, normalizeLine(line)); } }
 	inline void UnfoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.unfoldAroundLine(document, normalizeLine(line)); } }
@@ -2370,6 +2378,16 @@ protected:
 	std::function<void(const std::string& identifier, DocPos start)> goToDefinitionCallback;
 	std::function<void(Navigation direction)> navigationCallback;
 	std::vector<std::pair<std::string, std::string>> autoReplacements;
+
+	struct Ligature {
+		std::vector<ImWchar> sequence;
+		ImWchar glyph;
+	};
+
+	std::vector<Ligature> ligatures;	// longest sequences first
+
+	// the ligature drawn for the glyphs of `line` from `index` (nullptr: none)
+	const Ligature* ligatureAt(size_t line, size_t index) const;
 	ImVec2 popupWindowPos;
 	DocPos popupDocPos;
 
