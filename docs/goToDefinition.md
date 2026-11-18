@@ -1,4 +1,4 @@
-# Go to Definition, Include Trees and File Watching
+# Go to Definition, Back and Forward, Include Trees and File Watching
 
 The text editor edits one document; an application editing several (an IDE, a shader
 editor) usually wants to know how they relate and to jump between them. The editor
@@ -36,6 +36,47 @@ if (!requested.empty()) {
 ```
 
 **GetIdentifierAt** gives the same identifier for any position.
+
+### Back and Forward
+
+Jumps (to a definition, an error, another document) leave places behind; Back and Forward
+go through them as undo and redo go through edits. Alt+Left and Alt+Right (Control+Minus and
+Control+Shift+Minus on macOS, where Alt with the arrows moves by word) and the mouse's back
+and forward buttons over the editor call the application, which keeps the places:
+NavigationHistory (header only, in the **extras** folder) does. Before a jump, **Record**
+where the cursor was; **Back** and **Forward** take where it is and give the place to go
+to. A new jump drops the way forward, as a new edit drops redo, a step never stays where the
+cursor already is, and **Forget** drops the places of a document that is gone.
+
+```c++
+NavigationHistory history;
+std::optional<TextEditor::Navigation> navigate;
+editor.SetNavigationCallback([&](TextEditor::Navigation direction) { navigate = direction; });
+
+auto here = [&]() {
+	auto pos = editor.GetMainCursorPosition();
+	return NavigationHistory::Location{currentDocument, pos.line, pos.index};
+};
+
+...
+// a jump
+history.Record(here());
+openDocument(found[0].document);
+
+...
+editor.Render("Shader");
+
+if (navigate) {
+	NavigationHistory::Location to;
+
+	if (*navigate == TextEditor::Navigation::back ? history.Back(here(), to) : history.Forward(here(), to)) {
+		openDocument(to.document);
+		editor.SetCursor(TextEditor::DocPos(to.line, to.index));
+	}
+
+	navigate.reset();
+}
+```
 
 ### SourceIndex
 

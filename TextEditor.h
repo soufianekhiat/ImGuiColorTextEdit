@@ -561,6 +561,19 @@ public:
 	// the identifier at a position as go to definition sees it ("" when there is none) and where it starts
 	inline std::string GetIdentifierAt(DocPos pos, DocPos* start=nullptr) const { return getIdentifierAt(normalizePos(pos), start); }
 
+	// navigation: Alt+Left and Alt+Right (Control+Minus and Control+Shift+Minus on macOS, where Alt+arrows
+	// move by word) and the mouse's back and forward buttons over the editor ask the application to go back
+	// or forward through the places it went, as undo and redo do with edits (extras/NavigationHistory keeps
+	// them); like go to definition, best handled after Render returns
+	enum class Navigation {
+		back,
+		forward
+	};
+
+	inline void SetNavigationCallback(std::function<void(Navigation direction)> callback) { navigationCallback = callback; }
+	inline void ClearNavigationCallback() { SetNavigationCallback(nullptr); }
+	inline bool HasNavigationCallback() const { return navigationCallback != nullptr; }
+
 	// line folding support (only works when line folding is activated)
 	inline void FoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.foldAroundLine(document, normalizeLine(line)); } }
 	inline void UnfoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.unfoldAroundLine(document, normalizeLine(line)); } }
@@ -2346,6 +2359,7 @@ protected:
 	std::function<void(PopupData& data)> textContextMenuCallback;
 	std::function<void(PopupData& data)> textHoverCallback;
 	std::function<void(const std::string& identifier, DocPos start)> goToDefinitionCallback;
+	std::function<void(Navigation direction)> navigationCallback;
 	ImVec2 popupWindowPos;
 	DocPos popupDocPos;
 

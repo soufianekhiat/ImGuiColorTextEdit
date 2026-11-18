@@ -1474,8 +1474,15 @@ void TextEditor::handleKeyboardInputs() {
 			}
 		}
 
+		// navigation through the places the application went (on macOS, ImGuiMod_Super is the Control key)
+		const auto back = macOS ? ImGuiMod_Super | ImGuiKey_Minus : ImGuiMod_Alt | ImGuiKey_LeftArrow;
+		const auto forward = macOS ? ImGuiMod_Super | ImGuiMod_Shift | ImGuiKey_Minus : ImGuiMod_Alt | ImGuiKey_RightArrow;
+
+		if (navigationCallback && ImGui::Shortcut(back, ImGuiInputFlags_Repeat)) { navigationCallback(Navigation::back); }
+		else if (navigationCallback && ImGui::Shortcut(forward, ImGuiInputFlags_Repeat)) { navigationCallback(Navigation::forward); }
+
 		// cursor movements and selections
-		if (ImGui::Shortcut(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat)) { moveUp(1, false); }
+		else if (ImGui::Shortcut(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat)) { moveUp(1, false); }
 		else if (ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_UpArrow, ImGuiInputFlags_Repeat)) { moveUp(1, true); }
 		else if (ImGui::Shortcut(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat)) { moveDown(1, false); }
 		else if (ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_DownArrow, ImGuiInputFlags_Repeat)) { moveDown(1, true); }
@@ -1667,6 +1674,12 @@ void TextEditor::handleKeyboardInputs() {
 //
 
 void TextEditor::handleMouseInteractions() {
+	// the mouse's back and forward buttons
+	if (navigationCallback && ImGui::IsWindowHovered()) {
+		if (ImGui::IsMouseClicked(3)) { navigationCallback(Navigation::back); }
+		else if (ImGui::IsMouseClicked(4)) { navigationCallback(Navigation::forward); }
+	}
+
 	auto io = ImGui::GetIO();
 	const auto mousePos = ImGui::GetMousePos() - cursorScreenPos;
 	const auto absoluteMousePos = ImGui::GetMousePos() - ImGui::GetWindowPos();

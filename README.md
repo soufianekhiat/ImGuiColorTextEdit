@@ -108,7 +108,7 @@ features are however included.
 - Supports custom line number rendering through a callback (see [example](docs/customLineNumbers.md)).
 - No longer uses regular expressions for colorizing text (see below).
 - Provides an example Language Server Protocol (LSP) bridge (see [example](docs/lsp.md)).
-- Calls the application to go to the definition of the identifier under the cursor (Alt+G), with optional companions that index the includes and symbols of C-like sources and watch files (see [details](docs/goToDefinition.md)).
+- Calls the application to go to the definition of the identifier under the cursor (Alt+G) and back and forward through the places it went (Alt+Left, Alt+Right, the mouse's buttons), with optional companions that keep those places, index the includes and symbols of C-like sources and watch files (see [details](docs/goToDefinition.md)).
 - Provides an optional companion widget to show differences between versions of text (see below).
 
 ## Integration
@@ -313,9 +313,9 @@ Below are two screenshots of its use in both modes. Have a look at the code in t
 
 This repository contains some optional companion classes for a simple autocomplete
 feature, a bridge to language servers, an index of the includes and symbols of C-like
-sources and a portable file watcher. Details on simple autocomplete can be found
+sources, a navigation history and a portable file watcher. Details on simple autocomplete can be found
 [here](docs/autocomplete.md), details on the language server bridge are
-[here](docs/lsp.md) and details on the index and the watcher are
+[here](docs/lsp.md) and details on the index, the history and the watcher are
 [here](docs/goToDefinition.md). The source code for these components are in the
 [extras folder](extras/) and the [example application](example/) shows how
 to use them.
