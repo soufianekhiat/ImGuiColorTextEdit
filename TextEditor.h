@@ -574,6 +574,14 @@ public:
 	inline void ClearNavigationCallback() { SetNavigationCallback(nullptr); }
 	inline bool HasNavigationCallback() const { return navigationCallback != nullptr; }
 
+	// auto replacements: text typed becomes another, as a language writes a name as its glyph ("pi" as the
+	// Greek letter, "sqrt(2)" as the root sign and 2); pairs of (typed, replacement) in UTF-8. A typed text
+	// ending in a word character is replaced once the character after it is typed and is not one ("pi" in
+	// "pixel" stays), one ending otherwise as soon as it is complete; neither when it continues a word or sits
+	// in a string. The replacement is an undo step of its own: undo gives the typed text back.
+	inline void SetAutoReplacements(const std::vector<std::pair<std::string, std::string>>& replacements) { autoReplacements = replacements; }
+	inline const std::vector<std::pair<std::string, std::string>>& GetAutoReplacements() const { return autoReplacements; }
+
 	// line folding support (only works when line folding is activated)
 	inline void FoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.foldAroundLine(document, normalizeLine(line)); } }
 	inline void UnfoldAroundLine(size_t line) { if (config.lineFolding) { lineFold.unfoldAroundLine(document, normalizeLine(line)); } }
@@ -2250,6 +2258,7 @@ protected:
 
 	// add/delete characters
 	void handleCharacter(ImWchar character);
+	void autoReplace(ImWchar character);
 	void handleBackspace(bool wordMode);
 	void handleDelete(bool wordMode);
 
@@ -2360,6 +2369,7 @@ protected:
 	std::function<void(PopupData& data)> textHoverCallback;
 	std::function<void(const std::string& identifier, DocPos start)> goToDefinitionCallback;
 	std::function<void(Navigation direction)> navigationCallback;
+	std::vector<std::pair<std::string, std::string>> autoReplacements;
 	ImVec2 popupWindowPos;
 	DocPos popupDocPos;
 

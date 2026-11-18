@@ -1641,6 +1641,7 @@ void TextEditor::handleKeyboardInputs() {
 
 					if (character == '\n' || character >= 32) {
 						handleCharacter(character);
+						autoReplace(character);
 					}
 				}
 			}
@@ -2834,15 +2835,19 @@ void TextEditor::handleCharacter(ImWchar character) {
 	const auto isPaired = !config.overwrite && config.completePairedGlyphs && CodePoint::isPairOpener(opener);
 	const auto closer = CodePoint::toPairCloser(opener);
 
-	// ignore input if it was the closing character for a pair that was automatically inserted
+	// ignore input if it was the closing character for a pair that was automatically inserted, typed where
+	// that closer still is (typing before it keeps it pending: "(", "x", ")" gives "(x)"), otherwise forget it
 	if (completePairCloser) {
-		if (completePairCloser == character && completePairLocation == cursors.getCurrent().getSelectionEnd()) {
+		const auto at = cursors.getCurrent().getSelectionEnd();
+
+		if (at != completePairLocation || document.getCodePoint(at) != completePairCloser) {
+			completePairCloser = 0;
+
+		} else if (completePairCloser == character) {
 			completePairCloser = 0;
 			moveRight(false, false);
 			return;
 		}
-
-		completePairCloser = 0;
 	}
 
 	if (cursors.anyHasSelection() && isPaired) {
@@ -2907,6 +2912,11 @@ void TextEditor::handleCharacter(ImWchar character) {
 		// just insert a regular character
 		char utf8[4];
 		insertTextIntoAllCursors(transaction, std::string_view(utf8, CodePoint::write(utf8, character)));
+
+		// a pending closer moved along with the cursor
+		if (completePairCloser) {
+			completePairLocation = cursors.getCurrent().getSelectionEnd();
+		}
 	}
 
 	endTransaction(transaction);
@@ -2914,6 +2924,89 @@ void TextEditor::handleCharacter(ImWchar character) {
 	if (autocomplete.startTyping(cursors, character)) {
 		makeCursorVisible();
 	}
+}
+
+
+//
+//	TextEditor::autoReplace
+//
+
+void TextEditor::autoReplace(ImWchar character) {
+	if (autoReplacements.empty() || config.readOnly) {
+		return;
+	}
+
+	// a byte of a word: a word character, or part of a glyph beyond ASCII (as a replacement writes)
+	const auto wordByte = [](char c) { return static_cast<unsigned char>(c) >= 0x80 || CodePoint::isWord(static_cast<unsigned char>(c)); };
+	const auto glyphs = [](std::string_view text) {
+		size_t count = 0;
+
+		for (auto c : text) {
+			count += (static_cast<unsigned char>(c) & 0xc0) != 0x80;
+		}
+
+		return count;
+	};
+
+	char typed[4];
+	const auto typedSize = static_cast<size_t>(CodePoint::write(typed, character));
+	const auto transaction = startTransaction(false);
+
+	for (auto cursor = cursors.begin(); cursor < cursors.end(); cursor++) {
+		if (cursor->hasSelection()) {
+			continue;
+		}
+
+		const auto end = cursor->getSelectionEnd();
+		const auto before = document.getSectionText(DocPos(end.line, 0), end);
+
+		for (auto& [from, to] : autoReplacements) {
+			if (from.empty()) {
+				continue;
+			}
+
+			// where the typed text ends: before the character just typed when it ends in a word character
+			auto stop = before.size();
+
+			if (CodePoint::isWord(static_cast<unsigned char>(from.back()))) {
+				if (CodePoint::isWord(character) || stop < typedSize || before.compare(stop - typedSize, typedSize, typed, typedSize) != 0) {
+					continue;
+				}
+
+				stop -= typedSize;
+			}
+
+			if (stop < from.size() || before.compare(stop - from.size(), from.size(), from) != 0) {
+				continue;
+			}
+
+			const auto begin = stop - from.size();
+
+			if (wordByte(from.front()) && begin > 0 && wordByte(before[begin - 1])) {
+				continue;
+			}
+
+			const auto start = DocPos(end.line, glyphs(std::string_view(before).substr(0, begin)));
+
+			if (document.getColor(start) == Color::string) {
+				continue;
+			}
+
+			const auto finish = DocPos(end.line, start.index + glyphs(from));
+			deleteText(transaction, start, finish);
+			cursors.adjustForDelete(cursor, start, finish, true);
+			const auto inserted = insertText(transaction, start, to);
+			cursors.adjustForInsert(cursor, start, inserted, true);
+
+			if (completePairCloser && completePairLocation.line == start.line && completePairLocation >= finish) {
+				completePairLocation.index = completePairLocation.index - finish.index + inserted.index;
+			}
+
+			break;
+		}
+	}
+
+	endTransaction(transaction);
 }
 
 
