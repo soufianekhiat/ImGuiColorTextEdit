@@ -246,6 +246,7 @@ bool TextEditor::render(const char* title, const ImVec2& size, ImGuiChildFlags c
 						bb.Max,
 						ImGui::GetColorU32(ImGuiCol_NavCursor),
 						ImGui::GetStyle().FrameRounding,
+						ImDrawFlags_None,
 						fontScaleDpi);
 				}
 
